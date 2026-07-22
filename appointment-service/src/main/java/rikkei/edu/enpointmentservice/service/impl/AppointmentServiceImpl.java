@@ -2,6 +2,7 @@ package rikkei.edu.enpointmentservice.service.impl;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
+import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,7 @@ import rikkei.edu.enpointmentservice.repository.AppointRepository;
 import rikkei.edu.enpointmentservice.service.AppointmentService;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -92,5 +94,35 @@ public class AppointmentServiceImpl implements AppointmentService {
             throw (IllegalArgumentException) e;
         }
         throw new ServiceUnavailableException("Hiện tại không thể kiểm tra thông tin bác sĩ, vui lòng thử lại sau vài giây");
+    }
+
+
+    @TimeLimiter(name = "insuranceTimeout", fallbackMethod = "checkInsuranceFallback")
+    public CompletableFuture<String> checkInsuranceStatus(String patientInsuranceId) {
+        return CompletableFuture.supplyAsync(() -> {
+            log.info("Đang kết nối tới Insurance-Service để kiểm tra BHYT...");
+
+            try {
+                // Giả lập Insurance-Service xử lý rất chậm (mất 3 giây)
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            return "BHYT Hợp lệ - Được giảm 80% chi phí";
+        });
+    }
+
+    /**
+     * Fallback Method xử lý khi quá 1s (TimeoutException)
+     * Giúp hệ thống không bị treo, tự động chuyển sang thanh toán trực tiếp
+     */
+    public CompletableFuture<String> checkInsuranceFallback(String patientInsuranceId, Throwable t) {
+        log.warn("Insurance-Service phản hồi quá lâu (>1s) hoặc gặp sự cố: {}", t.getMessage());
+
+        // Trả về kết quả hoàn thành ngay lập tức
+        return CompletableFuture.completedFuture(
+                "Insurance-Service phản hồi quá lâu. Đã bỏ qua bước kiểm tra BHYT, cho phép thanh toán trực tiếp!"
+        );
     }
 }

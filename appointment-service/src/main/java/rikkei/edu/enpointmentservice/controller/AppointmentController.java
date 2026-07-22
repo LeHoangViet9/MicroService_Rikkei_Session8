@@ -14,6 +14,7 @@ import rikkei.edu.enpointmentservice.exception.ServiceUnavailableException;
 import rikkei.edu.enpointmentservice.service.AppointmentService;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
 
 @RestController
 @RequestMapping("/api/v1/appointments")
@@ -80,5 +81,11 @@ public class AppointmentController {
                 .build();
 
         return new ResponseEntity<>(errorResponse, HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @GetMapping("/check-insurance")
+    public CompletableFuture<ResponseEntity<String>> checkInsurance(@RequestParam String insuranceId) {
+        return appointmentService.checkInsuranceStatus(insuranceId)
+                .thenApply(result -> ResponseEntity.ok(result));
     }
 }
