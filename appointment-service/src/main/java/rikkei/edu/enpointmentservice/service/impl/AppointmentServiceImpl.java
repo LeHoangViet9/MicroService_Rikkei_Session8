@@ -1,6 +1,7 @@
 package rikkei.edu.enpointmentservice.service.impl;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -25,13 +26,13 @@ public class AppointmentServiceImpl implements AppointmentService {
 
     @Override
     public AppointmentResponse createAppointment(AppointmentRequest request) {
-        // 1. Kiem tra Patient Service
+        // 1. Kiem tra Patient Service (Co Retry + Fallback)
         checkPatientExists(request.getPatientId());
 
-        // 2. Kiem tra Doctor Service (Goi qua method duoc boc @CircuitBreaker)
+        // 2. Kiem tra Doctor Service (Circuit Breaker)
         checkDoctorExists(request.getDoctorId());
 
-        // 3. Luu thong tin cuoc hen
+        // 3. Luu cuoc hen
         Appointment appointment = new Appointment();
         appointment.setPatientId(request.getPatientId());
         appointment.setDoctorId(request.getDoctorId());
@@ -51,15 +52,29 @@ public class AppointmentServiceImpl implements AppointmentService {
                 .build();
     }
 
-    private void checkPatientExists(Long patientId) {
+    // Ten 'patientRetry' phai trung khop voi application.properties
+    @Retry(name = "patientRetry", fallbackMethod = "patientFallback")
+    public void checkPatientExists(Long patientId) {
+        log.info("Dang goi sang Patient-Service de kiem tra patientId = {}", patientId);
         String patientUrl = "http://patient-service/api/v1/patients/" + patientId;
+
         try {
             restTemplate.getForEntity(patientUrl, Object.class);
         } catch (HttpClientErrorException.NotFound e) {
+            // Neu benh nhan 404 nguyen nhan ro rang, khong can retry -> throw truc tiep
             throw new IllegalArgumentException("Lỗi: Bệnh nhân có ID " + patientId + " không tồn tại!");
-        } catch (Exception e) {
-            throw new ServiceUnavailableException("Không thể kết nối tới Patient-Service!");
         }
+    }
+
+    // Fallback Method: Chi chay khi da Retry du 3 lan ma van loi
+    public void patientFallback(Long patientId, Exception e) {
+        log.error("Da retry 3 lan nhung Patient-Service van khong phan hoi: {}", e.getMessage());
+
+        if (e instanceof IllegalArgumentException) {
+            throw (IllegalArgumentException) e;
+        }
+
+        throw new ServiceUnavailableException("Không thể kết nối tới Patient-Service sau nhiều lần thử lại. Vui lòng thử lại sau!");
     }
 
     @CircuitBreaker(name = "doctorServiceCB", fallbackMethod = "getDoctorFallback")
@@ -72,16 +87,10 @@ public class AppointmentServiceImpl implements AppointmentService {
         }
     }
 
-    // Fallback Method dung theo yeu cau bai tap
     public void getDoctorFallback(Long doctorId, Exception e) {
-        log.error("Circuit Breaker kich hoat cho Doctor-Service do loi: {}", e.getMessage());
-
-        // Neu bac si khong ton tai (404), van throw IllegalArgumentException cho controller xu ly 400
         if (e instanceof IllegalArgumentException) {
             throw (IllegalArgumentException) e;
         }
-
-        // Truong hop Doctor-Service sap hoac Circuit Breaker OPEN -> Nem ra loi 503
         throw new ServiceUnavailableException("Hiện tại không thể kiểm tra thông tin bác sĩ, vui lòng thử lại sau vài giây");
     }
 }
