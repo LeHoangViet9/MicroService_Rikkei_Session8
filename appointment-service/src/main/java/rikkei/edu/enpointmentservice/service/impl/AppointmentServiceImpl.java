@@ -1,10 +1,11 @@
 package rikkei.edu.enpointmentservice.service.impl;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
-import rikkei.edu.enpointmentservice.config.WebConfig;
 import rikkei.edu.enpointmentservice.dto.request.AppointmentRequest;
 import rikkei.edu.enpointmentservice.dto.response.AppointmentResponse;
 import rikkei.edu.enpointmentservice.entity.Appointment;
@@ -16,44 +17,74 @@ import java.time.LocalDateTime;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AppointmentServiceImpl implements AppointmentService {
+
     private final AppointRepository appointRepository;
     private final RestTemplate restTemplate;
+
     @Override
     public AppointmentResponse createAppointment(AppointmentRequest request) {
-        String patientUrl="http://patient-service/api/v1/patients/" + request.getPatientId();
-        try {
-            restTemplate.getForEntity(patientUrl, Object.class);
-        } catch (HttpClientErrorException.NotFound e) {
-            throw new IllegalArgumentException("Lỗi: Bệnh nhân có ID " + request.getPatientId() + " không tồn tại!");
-        } catch (Exception e) {
-            throw new ServiceUnavailableException("Không thể kết nối tới Patient-Service!");
-        }
+        // 1. Kiem tra Patient Service
+        checkPatientExists(request.getPatientId());
 
-        String doctorUrl="http://doctor-service/api/v1/doctors/" + request.getDoctorId();
-        try{
-            restTemplate.getForEntity(doctorUrl, Object.class);
-        }catch (HttpClientErrorException.NotFound e) {
-            throw new IllegalArgumentException("Lỗi: Bác sĩ có ID " + request.getPatientId() + " không tồn tại!");
-        } catch (Exception e) {
-            throw new ServiceUnavailableException("Không thể kết nối tới Patient-Service!");
-        }
+        // 2. Kiem tra Doctor Service (Goi qua method duoc boc @CircuitBreaker)
+        checkDoctorExists(request.getDoctorId());
+
+        // 3. Luu thong tin cuoc hen
         Appointment appointment = new Appointment();
         appointment.setPatientId(request.getPatientId());
         appointment.setDoctorId(request.getDoctorId());
-
         appointment.setAppointmentDate(LocalDateTime.now().plusDays(1));
         appointment.setReason("Khám sức khỏe tổng quát");
         appointment.setStatus("PENDING");
 
-        Appointment savedAppointment1= appointRepository.save(appointment);
+        Appointment savedAppointment = appointRepository.save(appointment);
+
         return AppointmentResponse.builder()
-                .id(savedAppointment1.getId())
-                .status(savedAppointment1.getStatus())
-                .doctorId(savedAppointment1.getDoctorId())
-                .appointmentDate(savedAppointment1.getAppointmentDate())
-                .patientId(savedAppointment1.getPatientId())
-                .reason(savedAppointment1.getReason())
+                .id(savedAppointment.getId())
+                .status(savedAppointment.getStatus())
+                .doctorId(savedAppointment.getDoctorId())
+                .appointmentDate(savedAppointment.getAppointmentDate())
+                .patientId(savedAppointment.getPatientId())
+                .reason(savedAppointment.getReason())
                 .build();
+    }
+
+    private void checkPatientExists(Long patientId) {
+        String patientUrl = "http://patient-service/api/v1/patients/" + patientId;
+        try {
+            restTemplate.getForEntity(patientUrl, Object.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new IllegalArgumentException("Lỗi: Bệnh nhân có ID " + patientId + " không tồn tại!");
+        } catch (Exception e) {
+            throw new ServiceUnavailableException("Không thể kết nối tới Patient-Service!");
+        }
+    }
+
+    // Ten instance 'doctorServiceCB' phai khop voi file application.properties
+    @CircuitBreaker(name = "doctorServiceCB", fallbackMethod = "doctorFallback")
+    public void checkDoctorExists(Long doctorId) {
+        String doctorUrl = "http://doctor-service/api/v1/doctors/" + doctorId;
+        try {
+            restTemplate.getForEntity(doctorUrl, Object.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new IllegalArgumentException("Lỗi: Bác sĩ có ID " + doctorId + " không tồn tại!");
+        }
+        // Luu y: Khong dung try-catch generic Exception o day
+        // de ngoai le duoc nem ra cho Resilience4j ghi nhận failure rate!
+    }
+
+    // Fallback Method: Duoc goi khi doctor-service gap loi hoac khi mach dang OPEN
+    public void doctorFallback(Long doctorId, Throwable throwable) {
+        log.error("Circuit Breaker kich hoat cho Doctor-Service do loi: {}", throwable.getMessage());
+
+        // Neu nguyen nhan la do xac thuc bac si khong ton tai (IllegalArgumentException)
+        if (throwable instanceof IllegalArgumentException) {
+            throw (IllegalArgumentException) throwable;
+        }
+
+        // Truong hop Doctor-Service sap / Mach o trang thai OPEN / Call Timeout
+        throw new ServiceUnavailableException("Hệ thống kiểm tra lịch bác sĩ hiện không khả dụng (Doctor-Service). Vui lòng thử lại sau!");
     }
 }
