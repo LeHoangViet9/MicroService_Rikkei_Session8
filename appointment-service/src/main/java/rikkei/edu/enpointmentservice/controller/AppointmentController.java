@@ -34,7 +34,7 @@ public class AppointmentController {
         } catch (ServiceUnavailableException e) {
             ApiResponseError errorResponse = ApiResponseError.builder()
                     .timestamp(LocalDateTime.now())
-                    .status(HttpStatus.SERVICE_UNAVAILABLE.value())
+                    .status(HttpStatus.SERVICE_UNAVAILABLE.value()) // HTTP 503
                     .error("Service Unavailable")
                     .message(e.getMessage())
                     .path(httpServletRequest.getRequestURI())
@@ -44,7 +44,7 @@ public class AppointmentController {
         } catch (IllegalArgumentException e) {
             ApiResponseError errorResponse = ApiResponseError.builder()
                     .timestamp(LocalDateTime.now())
-                    .status(HttpStatus.BAD_REQUEST.value())
+                    .status(HttpStatus.BAD_REQUEST.value()) // HTTP 400
                     .error("Bad Request")
                     .message(e.getMessage())
                     .path(httpServletRequest.getRequestURI())

@@ -1,6 +1,8 @@
 package rikkei.edu.enpointmentservice.service.impl;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.retry.annotation.Retry;
 import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import lombok.RequiredArgsConstructor;
@@ -124,5 +126,46 @@ public class AppointmentServiceImpl implements AppointmentService {
         return CompletableFuture.completedFuture(
                 "Insurance-Service phản hồi quá lâu. Đã bỏ qua bước kiểm tra BHYT, cho phép thanh toán trực tiếp!"
         );
+    }
+
+    /**
+     * THỨ TỰ THỰC THI (TỪ NGOÀI VÀO TRONG):
+     * 1. @RateLimiter  -> Chống spam/quá tải (Nêu vượt quá -> nhảy vào Fallback ngay)
+     * 2. @CircuitBreaker -> Ngắt mạch nếu tỉ lệ lỗi vượt 50%
+     * 3. @Retry         -> Thử lại 3 lần nếu gặp lỗi kết nối/mạng tạm thời
+     */
+    @RateLimiter(name = "doctorServiceLimiter", fallbackMethod = "doctorResilienceFallback")
+    @CircuitBreaker(name = "doctorServiceCB", fallbackMethod = "doctorResilienceFallback")
+    @Retry(name = "doctorServiceRetry", fallbackMethod = "doctorResilienceFallback")
+    public void checkDoctorExistsWithResilience(Long doctorId) {
+        log.info("Gửi request kết nối tới Doctor-Service cho Doctor ID = {}", doctorId);
+        String doctorUrl = "http://doctor-service/api/v1/doctors/" + doctorId;
+
+        try {
+            restTemplate.getForEntity(doctorUrl, Object.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            // Neu bac si khong ton tai (404), throw IllegalArgumentException de khong tinh vao loi Retry
+            throw new IllegalArgumentException("Lỗi: Bác sĩ có ID " + doctorId + " không tồn tại!");
+        }
+    }
+
+    /**
+     * Fallback chung duy nhất xử lý cho cả 3 tầng (RateLimiter, CircuitBreaker, Retry)
+     */
+    public void doctorResilienceFallback(Long doctorId, Throwable throwable) {
+        log.error("Hệ thống Kích hoạt Fallback do lỗi: {}", throwable.getMessage());
+
+        // Nếu là lỗi validation thông thường -> Bắn ra 400 Bad Request
+        if (throwable instanceof IllegalArgumentException) {
+            throw (IllegalArgumentException) throwable;
+        }
+
+        // Nếu bị Rate Limiter chặn -> Bắn ra lỗi 429
+        if (throwable instanceof RequestNotPermitted) {
+            throw new ServiceUnavailableException("Bạn đã vượt quá số lần thao tác cho phép (Rate Limit). Cuộc hẹn đã được ghi nhận ở trạng thái PENDING!");
+        }
+
+        // Nếu bị ngắt mạch (Circuit Breaker OPEN) hoặc Retry thất bại 3 lần
+        throw new ServiceUnavailableException("Hệ thống kiểm tra bác sĩ hiện không khả dụng. Cuộc hẹn của bạn đã được lưu ở trạng thái PENDING!");
     }
 }
