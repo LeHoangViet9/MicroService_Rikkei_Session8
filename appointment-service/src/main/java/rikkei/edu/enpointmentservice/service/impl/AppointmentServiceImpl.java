@@ -62,8 +62,7 @@ public class AppointmentServiceImpl implements AppointmentService {
         }
     }
 
-    // Ten instance 'doctorServiceCB' phai khop voi file application.properties
-    @CircuitBreaker(name = "doctorServiceCB", fallbackMethod = "doctorFallback")
+    @CircuitBreaker(name = "doctorServiceCB", fallbackMethod = "getDoctorFallback")
     public void checkDoctorExists(Long doctorId) {
         String doctorUrl = "http://doctor-service/api/v1/doctors/" + doctorId;
         try {
@@ -71,20 +70,18 @@ public class AppointmentServiceImpl implements AppointmentService {
         } catch (HttpClientErrorException.NotFound e) {
             throw new IllegalArgumentException("Lỗi: Bác sĩ có ID " + doctorId + " không tồn tại!");
         }
-        // Luu y: Khong dung try-catch generic Exception o day
-        // de ngoai le duoc nem ra cho Resilience4j ghi nhận failure rate!
     }
 
-    // Fallback Method: Duoc goi khi doctor-service gap loi hoac khi mach dang OPEN
-    public void doctorFallback(Long doctorId, Throwable throwable) {
-        log.error("Circuit Breaker kich hoat cho Doctor-Service do loi: {}", throwable.getMessage());
+    // Fallback Method dung theo yeu cau bai tap
+    public void getDoctorFallback(Long doctorId, Exception e) {
+        log.error("Circuit Breaker kich hoat cho Doctor-Service do loi: {}", e.getMessage());
 
-        // Neu nguyen nhan la do xac thuc bac si khong ton tai (IllegalArgumentException)
-        if (throwable instanceof IllegalArgumentException) {
-            throw (IllegalArgumentException) throwable;
+        // Neu bac si khong ton tai (404), van throw IllegalArgumentException cho controller xu ly 400
+        if (e instanceof IllegalArgumentException) {
+            throw (IllegalArgumentException) e;
         }
 
-        // Truong hop Doctor-Service sap / Mach o trang thai OPEN / Call Timeout
-        throw new ServiceUnavailableException("Hệ thống kiểm tra lịch bác sĩ hiện không khả dụng (Doctor-Service). Vui lòng thử lại sau!");
+        // Truong hop Doctor-Service sap hoac Circuit Breaker OPEN -> Nem ra loi 503
+        throw new ServiceUnavailableException("Hiện tại không thể kiểm tra thông tin bác sĩ, vui lòng thử lại sau vài giây");
     }
 }
